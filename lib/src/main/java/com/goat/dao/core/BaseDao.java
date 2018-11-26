@@ -31,8 +31,7 @@ public class BaseDao<T> implements IBaseDao<T>{
 
     private Map<String,Field> mFieldCache;  //把数据库中的字段名和实体类中的相应的Field缓存起来
 
-    public BaseDao(SQLiteDatabase sqliteDatabase, String databaseFilePath) {
-        this.mSqliteDatabase = sqliteDatabase;
+    public BaseDao(String databaseFilePath) {
         this.mDatabaseFilePath = databaseFilePath;
     }
 
@@ -57,25 +56,26 @@ public class BaseDao<T> implements IBaseDao<T>{
     }
 
     private boolean autoCreateTable() {
-        //1 打开或者创建数据库操作对象
+        //打开或者创建数据库操作对象
         mSqliteDatabase = SQLiteDatabase.openOrCreateDatabase(mDatabaseFilePath,null);
 
-        //2 条件判断
-        if(mSqliteDatabase == null){
-            throw new GoatDaoException("create database failed !!!");
-        }
+        checkCondition();
 
-        if(!mSqliteDatabase.isOpen()){
-            throw new GoatDaoException("database open failed !!!");
-        }
-
-        //3 获取表名以及字段名
+        //获取表名
         mTableName = mEntityClazz.getAnnotation(DbTable.class).tableName();
+        mFieldPrefix = mEntityClazz.getAnnotation(DbTable.class).fieldPrefix();
+
         if(mTableName == null || "".equals(mTableName)){
             throw new GoatDaoException("table name is null !!!");
         }
 
-        //4 创建数据库  create table if not exists usser2(tb_name TEXT,tb_password BIGINT)
+        createTableWithSql();
+
+        return true;
+    }
+
+    private boolean createTableWithSql() {
+        // 创建数据库  create table if not exists usser2(tb_name TEXT,tb_password BIGINT)
         StringBuilder sb = new StringBuilder();
         sb.append("CREATE TABLE IF NOT EXISTS ");
         sb.append(mTableName + "(");
@@ -87,6 +87,10 @@ public class BaseDao<T> implements IBaseDao<T>{
 
         for (Field field : declaredFields){
             DbField dbField = field.getAnnotation(DbField.class);
+            if(dbField == null){
+                continue;
+            }
+
             String fieldName = mFieldPrefix + dbField.value();
             Class<?> type = field.getType();
 
@@ -106,13 +110,13 @@ public class BaseDao<T> implements IBaseDao<T>{
             }
         }
 
-        //5 删除最后一个"," 并且替追加一个")"
+        // 删除最后一个"," 并且替追加一个")"
         if(sb.charAt(sb.length() - 1) == ','){
             sb.deleteCharAt(sb.length() - 1);
         }
         sb.append(")");
 
-        //6 执行拼接好的sql语句创建数据库
+        // 执行拼接好的sql语句创建数据库
         try {
             mSqliteDatabase.execSQL(sb.toString());
         }catch (Exception e){
@@ -122,6 +126,17 @@ public class BaseDao<T> implements IBaseDao<T>{
 
         return true;
     }
+
+    private void checkCondition() {
+        if(mSqliteDatabase == null){
+            throw new GoatDaoException("create database failed !!!");
+        }
+
+        if(!mSqliteDatabase.isOpen()){
+            throw new GoatDaoException("database open failed !!!");
+        }
+    }
+
 
     private void initCache() {
         //把数据库中的字段名和实体类中的相应的Field缓存起来
@@ -159,10 +174,16 @@ public class BaseDao<T> implements IBaseDao<T>{
     public long insert(List<T> entityList) {
         PreditionTool.checkNotNull(entityList,"entityList is null or empty !!!");
 
+        mSqliteDatabase.beginTransaction();
+
         int count = 0;
         for (T t : entityList){
             count += insert(t);
         }
+
+        // 设置事务处理成功，不设置会自动回滚不提交。
+        mSqliteDatabase.setTransactionSuccessful();
+        mSqliteDatabase.endTransaction();
 
         return count;
     }
@@ -179,7 +200,7 @@ public class BaseDao<T> implements IBaseDao<T>{
         Iterator<Map.Entry<String, Field>> iterator = mFieldCache.entrySet().iterator();
         while (iterator.hasNext()){
             String columnName = iterator.next().getKey();
-            Field field = iterator.next().getValue();
+            Field field = mFieldCache.get(columnName);
             field.setAccessible(true);
 
             Class type = field.getType();
